@@ -16,7 +16,7 @@ spec:
       - name: acr-secret
       containers:
       - name: mypythondockerrepo
-        image: rajcosivadevops/indianncpldemo:#{Build:BuildId}#
+        image: rajcosivadevops/mypythondockerrepo:#{Build:BuildId}#
         ports:
         - containerPort: 5000
 ---
