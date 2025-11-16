@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
       - name: mypythondockerrepo
-        image: falakdesai2/pythonpipelinedemo:latest
+        image: falakacrrepo1.azurecr.io/falakdesai2/mypythondockerrepo:latest
         ports:
         - containerPort: 5000
 ---
