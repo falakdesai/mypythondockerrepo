@@ -2,49 +2,46 @@ trigger:
 - master
 
 variables:
+  # General Variables
+  imageTag: '$(Build.BuildId)' # Using BuildId is better than 'latest' for tracking
+  
   # ACR Variables
   acrName: falakacrrepo1
-  imageName: falakdesai2/pythonpipelinedemo
-  # AKS Variables
-  azureSubscription: myaksconnection        # ARM Service Connection for AKS
-  azureResourceGroup: NCPLindia
-  aksCluster: myAKSCluster
+  imageRepository: falakdesai2/pythonpipelinedemo
+  
+  # Connection Names (MUST match your Service Connections)
+  acrConnection: 'MyDockerConnection'  # <-- **UPDATED** to use the new Docker Registry connection
+  aksConnection: 'myaksconnection'     # Kubernetes Service Connection name 
+  
+  # AKS Deployment Variables
   namespace: default
   k8sManifest: azure-aks.yaml
 
 # -------------------------------------------------------
-# Stage 1: Build & Push Docker Image to ACR
+# Stage 1: Build & Push Docker Image to ACR (Using Docker@2)
 # -------------------------------------------------------
 stages:
 - stage: Build
-  displayName: 'Build and Push Docker Image to ACR'
+  displayName: 'Build and Push Docker Image'
   jobs:
   - job: BuildJob
-    displayName: 'Build and Push Docker Image'
+    displayName: 'Docker Build and Push'
     pool:
       vmImage: 'ubuntu-latest'
     steps:
     - checkout: self
     
-    # Task to Build and Push via Azure CLI
-    - task: AzureCLI@2
-      displayName: 'Build and Push Docker Image via Azure CLI'
+    # Docker@2 task handles secure ACR login, build, and push
+    - task: Docker@2
+      displayName: 'Build and Push to ACR'
       inputs:
-        # Note: ACRconnect must be a Service Principal with ACR Push permissions
-        azureSubscription: 'MyACRService'
-        scriptType: bash
-        scriptLocation: inlineScript
-        inlineScript: |
-          echo "Logging in to ACR..."
-          # az acr login is handled implicitly by the task's Service Connection if using Docker@2
-          # If using AzureCLI@2, this line may still be required depending on agent setup.
-          # For robustness, we'll keep the direct push approach.
-          
-          echo "Building Docker image..."
-          docker build -t $(acrName).azurecr.io/$(imageName):latest .
-
-          echo "Pushing Docker image to ACR..."
-          docker push $(acrName).azurecr.io/$(imageName):latest
+        command: buildAndPush
+        # Now referencing the Docker Registry Service Connection
+        containerRegistry: $(acrConnection) 
+        repository: $(imageRepository)
+        tags: |
+          $(imageTag)
+          latest
 
 # -------------------------------------------------------
 # Stage 2: Deploy to AKS
@@ -55,32 +52,21 @@ stages:
   condition: succeeded()
   jobs:
   - job: DeployJob
-    displayName: 'Deploy to AKS'
+    displayName: 'Deploy Application to Cluster'
     pool:
       vmImage: 'ubuntu-latest'
     steps:
     
-    # RECOMMENDED: KubernetesManifest@1 for deployments
+    # KubernetesManifest@1 for deployments
     - task: KubernetesManifest@1
-      displayName: 'Deploy using KubernetesManifest'
+      displayName: 'Deploy Kubernetes Manifests'
       inputs:
         action: deploy
-        # Note: This is your Kubernetes Service Connection name
-        kubernetesServiceConnection: 'myaksconnection'
+        kubernetesServiceConnection: $(aksConnection) 
         namespace: $(namespace)
+        kubectlVersion: '1.29.x' 
         manifests: |
           $(k8sManifest)
-        # It's recommended to inject the image to ensure the correct tag is used:
-        # containers: '$(acrName).azurecr.io/$(imageName):$(Build.BuildId)'
-        
-    # OPTIONAL: kubectl@1 fallback (less recommended as it's an older task)
-    - task: Kubernetes@1
-      displayName: 'kubectl apply fallback'
-      inputs:
-        connectionType: 'Kubernetes Service Connection'
-        # Note: This is your Kubernetes Service Connection name
-        kubernetesServiceEndpoint: 'myaksconnection' 
-        namespace: $(namespace)
-        command: apply
-        useConfigurationFile: true
-        configuration: $(k8sManifest)
+        # Inject the specific image tag built in the previous stage
+        containers: |
+          $(acrName).azurecr.io/$(imageRepository):$(imageTag)
