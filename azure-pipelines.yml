@@ -1,15 +1,86 @@
-# Starter pipeline
-# Start with a minimal pipeline that you can customize to build and deploy your code.
-# Add steps that build, run tests, deploy, and more:
-# https://aka.ms/yaml
-
 trigger:
 - master
 
-pool:
-  vmImage: ubuntu-latest
+variables:
+  # ACR Variables
+  acrName: falakacrrepo1
+  imageName: falakdesai2/pythonpipelinedemo
+  # AKS Variables
+  azureSubscription: myaksconnection        # ARM Service Connection for AKS
+  azureResourceGroup: NCPLindia
+  aksCluster: myAKSCluster
+  namespace: default
+  k8sManifest: azure-aks.yaml
 
-steps:
-- script: echo Hello, world!
-  displayName: 'Run a one-line script'
+# -------------------------------------------------------
+# Stage 1: Build & Push Docker Image to ACR
+# -------------------------------------------------------
+stages:
+- stage: Build
+  displayName: 'Build and Push Docker Image to ACR'
+  jobs:
+  - job: BuildJob
+    displayName: 'Build and Push Docker Image'
+    pool:
+      vmImage: 'ubuntu-latest'
+    steps:
+    - checkout: self
+    
+    # Task to Build and Push via Azure CLI
+    - task: AzureCLI@2
+      displayName: 'Build and Push Docker Image via Azure CLI'
+      inputs:
+        # Note: ACRconnect must be a Service Principal with ACR Push permissions
+        azureSubscription: 'MyACRService'
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          echo "Logging in to ACR..."
+          # az acr login is handled implicitly by the task's Service Connection if using Docker@2
+          # If using AzureCLI@2, this line may still be required depending on agent setup.
+          # For robustness, we'll keep the direct push approach.
+          
+          echo "Building Docker image..."
+          docker build -t $(acrName).azurecr.io/$(imageName):latest .
 
+          echo "Pushing Docker image to ACR..."
+          docker push $(acrName).azurecr.io/$(imageName):latest
+
+# -------------------------------------------------------
+# Stage 2: Deploy to AKS
+# -------------------------------------------------------
+- stage: Deploy
+  displayName: 'Deploy to AKS'
+  dependsOn: Build
+  condition: succeeded()
+  jobs:
+  - job: DeployJob
+    displayName: 'Deploy to AKS'
+    pool:
+      vmImage: 'ubuntu-latest'
+    steps:
+    
+    # RECOMMENDED: KubernetesManifest@1 for deployments
+    - task: KubernetesManifest@1
+      displayName: 'Deploy using KubernetesManifest'
+      inputs:
+        action: deploy
+        # Note: This is your Kubernetes Service Connection name
+        kubernetesServiceConnection: 'myaksconnection'
+        namespace: $(namespace)
+        manifests: |
+          $(k8sManifest)
+        # It's recommended to inject the image to ensure the correct tag is used:
+        # containers: '$(acrName).azurecr.io/$(imageName):$(Build.BuildId)'
+        
+    # OPTIONAL: kubectl@1 fallback (less recommended as it's an older task)
+    - task: Kubernetes@1
+      displayName: 'kubectl apply fallback'
+      inputs:
+        connectionType: 'Kubernetes Service Connection'
+        # Note: This is your Kubernetes Service Connection name
+        kubernetesServiceEndpoint: 'myaksconnection' 
+        namespace: $(namespace)
+        command: apply
+        useConfigurationFile: true
+        configuration: $(k8sManifest)
